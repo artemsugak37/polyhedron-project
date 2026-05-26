@@ -1,4 +1,4 @@
-from math import pi
+from math import sqrt, asin, pi
 from functools import reduce
 from operator import add
 from common.r3 import R3
@@ -79,6 +79,13 @@ class Edge:
             return Segment(Edge.SBEG, Edge.SFIN)
         x = - f0 / (f1 - f0)
         return Segment(Edge.SBEG, x) if f0 < 0.0 else Segment(x, Edge.SFIN)
+    # Проверяет, является ли частично видимой
+
+    def is_partially_visible(self):
+        return len(self.gaps) > 0 and not (
+            len(self.gaps) == 1 and
+            self.gaps[0].beg == Edge.SBEG and
+            self.gaps[0].fin == Edge.SFIN)
 
 
 class Facet:
@@ -87,6 +94,7 @@ class Facet:
 
     def __init__(self, vertexes):
         self.vertexes = vertexes
+        self.edges = []
 
     # «Вертикальна» ли грань?
     def is_vertical(self):
@@ -111,7 +119,37 @@ class Facet:
         return n * \
             (-1.0) if n.dot(self.vertexes[k - 1] - self.center()) < 0.0 else n
 
+    # Угол между гранью и вертикалью
+    def angle_facet_with_vertical(self):
+        n = self.h_normal()
+        v = Polyedr.V
+        dot_prod = abs(n.dot(v))
+        len_n = sqrt(n.dot(n))
+        if len_n == 0:
+            return pi / 2
+        sin_beta = dot_prod / len_n  # len_v == 1.0
+        sin_beta = max(-1.0, min(1.0, sin_beta))
+        return asin(sin_beta)
+
+    # Площадь грани
+    def area(self):
+        if len(self.vertexes) < 3:
+            return 0.0
+        c = self.center()
+        total = 0.0
+        n = len(self.vertexes)
+        for i in range(n):
+            v1 = self.vertexes[i] - c
+            v2 = self.vertexes[(i + 1) % n] - c
+            cross = v1.cross(v2)
+            total += sqrt(cross.dot(cross))
+        return 0.5 * total
+
+    # Расстояние от центра грани до линии x = 2
+    def distance_from_center_to_line_x2(self):
+        return abs(self.center().x - 2)
     # Центр грани
+
     def center(self):
         return sum(self.vertexes, R3(0.0, 0.0, 0.0)) * \
             (1.0 / len(self.vertexes))
@@ -154,16 +192,52 @@ class Polyedr:
                     # массив вершин этой грани
                     vertexes = list(self.vertexes[int(n) - 1] for n in buf)
                     # задание рёбер грани
+                    facet = Facet(vertexes)
                     for n in range(size):
-                        self.edges.append(Edge(vertexes[n - 1], vertexes[n]))
-                    # задание самой грани
-                    self.facets.append(Facet(vertexes))
+                        e = Edge(vertexes[n - 1], vertexes[n])
+                        self.edges.append(e)
+                        facet.edges.append(e)
+                    self.facets.append(facet)
+    # Метод подсчёта искомой характеристики
 
-    # Метод изображения полиэдра
-    def draw(self, tk):
-        tk.clean()
+    def count_characteristic(self, fl=False):
+        # 1. Считаем тени для всех рёбер
         for e in self.edges:
             for f in self.facets:
                 e.shadow(f)
+
+        # 2. Подсчёт искомой характеристики
+        total_area = 0.0
+        angle_limit = 10 * pi / 180.0  # 10° в радианах
+
+        for facet in self.facets:
+            all_full = True   # флаги: все ли рёбра полностью видимы / невидимы
+            all_none = True
+
+            for e in facet.edges:
+                if len(e.gaps) == 0:                     # полностью невидимо
+                    all_full = False
+                elif e.is_partially_visible():           # частично видимо
+                    all_full = False
+                    all_none = False
+                else:                                    # полностью видимо
+                    all_none = False
+            if not all_full and not all_none:
+                # Угол с вертикалью <= 10°
+                if facet.angle_facet_with_vertical() <= angle_limit:
+                    # Расстояние от проекции центра до прямой x = 2
+                    if abs(facet.center().x - 2) < 1:
+                        total_area += facet.area()
+
+        print(f"Искомая характеристика: {total_area:.6f}")
+        if fl:
+            return total_area
+
+    # Метод изображения полиэдра с модификацией
+    def draw(self, tk):
+        tk.clean()
+        self.count_characteristic()
+        # 3. Отрисовка оставшихся просветов
+        for e in self.edges:
             for s in e.gaps:
                 tk.draw_line(e.r3(s.beg), e.r3(s.fin))
